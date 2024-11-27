@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
-import time ## for debug
 
 import torch
 
@@ -148,55 +147,7 @@ class KVDictCache(DynamicCache):
             if self.key_cache[layer_idx].shape[-2] >= self.buffer_length:
                 keys_crow_indices, keys_col_indices, keys_values = self._compress(self.key_cache[layer_idx][:, :, :self.approximation_length], key_dictionary)
                 values_crow_indices, values_col_indices, values_values = self._compress(self.value_cache[layer_idx][:, :, :self.approximation_length], value_dictionary)
-                
-                # ## for now we concat in dense states
-                # compressed_key_states = torch.sparse_csr_tensor(keys_crow_indices.to(torch.int32), keys_col_indices.to(torch.int32), keys_values.to(torch.float16), size=(keys_crow_indices.shape[0]-1, key_dictionary.shape[1]))
-                # compressed_value_states = torch.sparse_csr_tensor(values_crow_indices.to(torch.int32), values_col_indices.to(torch.int32), values_values.to(torch.float16), size=(values_crow_indices.shape[0]-1, value_dictionary.shape[1]))
 
-                # compressed_key_cache = torch.sparse_csr_tensor(self._key_cache_crow_indices[layer_idx].to(torch.int32), self._key_cache_col_indices[layer_idx].to(torch.int32), self._key_cache_values[layer_idx].to(torch.float16), size=(self._key_cache_crow_indices[layer_idx].shape[0]-1, key_dictionary.shape[1]))
-                # compressed_value_cache = torch.sparse_csr_tensor(self._value_cache_crow_indices[layer_idx].to(torch.int32), self._value_cache_col_indices[layer_idx].to(torch.int32), self._value_cache_values[layer_idx].to(torch.float16), size=(self._value_cache_crow_indices[layer_idx].shape[0]-1, value_dictionary.shape[1]))
-
-                # print("shape of old compressed_key_cache", compressed_key_cache.shape)
-                # print(self._key_cache_crow_indices[layer_idx].shape)
-                # print(self._key_cache_col_indices[layer_idx].shape)
-                # print(self._key_cache_values[layer_idx].shape)
-
-                # print("shape of adding compressed_key_states", compressed_key_states.shape)
-                # print(keys_crow_indices.shape)
-                # print(keys_col_indices.shape)
-                # print(keys_values.shape)
-
-                # # concat them
-                # print("shape of compressed_key_cache before to dense", compressed_key_cache.shape)
-                # dense_compressed_key_cache = compressed_key_cache.to_dense()
-                # print("shape of compressed_key_cache after to dense", dense_compressed_key_cache.shape)
-                # print("shape of compressed_key_states before to dense", compressed_key_states.shape)
-                # dense_compressed_key_states = compressed_key_states.to_dense()
-                # print("shape of compressed_key_states after to dense", dense_compressed_key_states.shape)
-                # compressed_key_cache = torch.cat([dense_compressed_key_cache, dense_compressed_key_states], dim=0)
-                # print("shape of compressed_key_cache after concat", compressed_key_cache.shape)
-                # compressed_key_cache = compressed_key_cache.to_sparse_csr()
-                # print("shape of compressed_key_cache after concat and after to sparse", compressed_key_cache.shape)
-
-                # dense_compressed_value_cache = compressed_value_cache.to_dense()
-                # dense_compressed_value_states = compressed_value_states.to_dense()
-                # compressed_value_cache = torch.cat([dense_compressed_value_cache, dense_compressed_value_states], dim=0)
-                # compressed_value_cache = compressed_value_cache.to_sparse_csr()
-
-                # print("shape of new compressed_key_cache", compressed_key_cache.shape)
-                # print(compressed_key_cache.crow_indices().shape)
-                # print(compressed_key_cache.col_indices().shape)
-                # print(compressed_key_cache.values().shape)
-
-                # self._key_cache_crow_indices[layer_idx] = compressed_key_cache.crow_indices().to(torch.int16)
-                # self._key_cache_col_indices[layer_idx] = compressed_key_cache.col_indices().to(torch.int16)
-                # self._value_cache_values[layer_idx] = compressed_value_cache.values().to(torch.float8_e4m3fn)
-                # self._value_cache_crow_indices[layer_idx] = compressed_value_cache.crow_indices().to(torch.int16)
-                # self._value_cache_col_indices[layer_idx] = compressed_value_cache.col_indices().to(torch.int16)
-                # self._value_cache_values[layer_idx] = compressed_value_cache.values().to(torch.float8_e4m3fn)
-                # print("***** max and min of both indices *****")
-                # print(max(self._key_cache_crow_indices[layer_idx]), min(self._key_cache_crow_indices[layer_idx]))
-                # print(max(keys_crow_indices), min(keys_crow_indices))
                 self._key_cache_crow_indices[layer_idx] = torch.cat([self._key_cache_crow_indices[layer_idx], keys_crow_indices[1:] + self._key_cache_crow_indices[layer_idx][-1]])
                 self._key_cache_col_indices[layer_idx] = torch.cat([self._key_cache_col_indices[layer_idx], keys_col_indices])
                 self._key_cache_values[layer_idx] = torch.cat([self._key_cache_values[layer_idx].to(torch.float16), keys_values.to(torch.float16)]).to(torch.float8_e4m3fn)
@@ -218,22 +169,7 @@ class KVDictCache(DynamicCache):
         return self._seen_tokens
     
     def _compress(self, tensor, dictionary):
-        # print("compressing a tensor of shape", tensor.shape)
         head_dim = tensor.shape[-1]
-        # start_time = time.time()
-        # print("shape of tensor", tensor.shape)
-        # print("shape of dictionary", dictionary.shape)
-        # print("what is going into omp", tensor.permute(2, 0, 1, 3).reshape(1, -1, head_dim).shape)
         reshaped_tensor = tensor.permute(2, 0, 1, 3).reshape(1, -1, head_dim)
         indptr, indices, data = omp(dictionary.unsqueeze(0), reshaped_tensor, self.max_sparsity, self.error_threshold)
-        # compressed_tensor = torch.sparse_csr_tensor(indptr, indices, data, size=(reshaped_tensor.shape[1], dictionary.shape[1]))
-        # end_time = time.time()
-        # print(f"Time to compress a single layer: {end_time - start_time:.6f} seconds")
-        # print("shape of compressed_tensor", compressed_tensor.shape)
-        # compressed_tensor = compressed_tensor.view(tensor.shape[0], tensor.shape[1], tensor.shape[2], -1)
-        # print("shape of reshaped compressed_tensor", compressed_tensor.shape)
-        # print("sparsity", self.max_sparsity)
-        # print("shape of indptr", indptr.shape)
-        # print("shape of indices", indices.shape)
-        # print("shape of data", data.shape)
         return indptr, indices, data 

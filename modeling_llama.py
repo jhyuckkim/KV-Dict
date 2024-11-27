@@ -21,7 +21,6 @@ import math
 import json
 import os
 from typing import List, Optional, Tuple, Union
-import time ##
 
 import torch
 import torch.nn.functional as F
@@ -63,56 +62,6 @@ _CONFIG_FOR_DOC = "LlamaConfig"
 import torch
 from typing import List
 
-# def split_csr(csr: torch.sparse_csr_tensor, bsz: int, num_kv_heads: int) -> List[List[torch.sparse_csr_tensor]]:
-#     """
-#     Splits a CSR sparse tensor into a list of lists of interleaved CSR tensors along the rows.
-#     The outer list has length `bsz`, and the inner list has length `num_kv_heads`.
-    
-#     Parameters:
-#     - csr : torch.sparse_csr_tensor
-#         A 2D PyTorch sparse CSR tensor of shape (seq_len * bsz * num_kv_heads, dictionary_size).
-#     - bsz : int
-#         The batch size.
-#     - num_kv_heads : int
-#         The number of key-value heads.
-        
-#     Returns:
-#         A list of lists. The outer list has length `bsz`, and the inner list has length `num_kv_heads`.
-#         Each inner tensor has shape (seq_len, dictionary_size).
-#     """
-#     if not csr.is_sparse_csr:
-#         raise ValueError("Input tensor must be a sparse CSR tensor.")
-    
-#     total_rows, d_size = csr.size()
-#     seq_len = total_rows // (bsz * num_kv_heads)
-#     if total_rows % (bsz * num_kv_heads) != 0:
-#         raise ValueError("Cannot evenly split the rows with given bsz and num_kv_heads.")
-
-#     crow_indices = csr.crow_indices()
-#     col_indices = csr.col_indices()
-#     values = csr.values()
-
-#     splits = []
-#     for batch_idx in range(bsz):
-#         inner_splits = []
-#         for kv_head_idx in range(num_kv_heads):
-#             row_indices = torch.arange(seq_len) * num_kv_heads * bsz + batch_idx * num_kv_heads + kv_head_idx
-#             start_indices, end_indices = crow_indices[row_indices], crow_indices[row_indices + 1]
-#             start_end_pairs = torch.stack((start_indices, end_indices), dim=1)
-
-#             split_cols = torch.cat([col_indices[s:e] for s, e in start_end_pairs], dim=0)
-#             split_vals = torch.cat([values[s:e] for s, e in start_end_pairs], dim=0)
-#             row_lengths = start_end_pairs[:, 1] - start_end_pairs[:, 0]
-#             new_crow = torch.cat((torch.tensor([0], device=csr.device), torch.cumsum(row_lengths, dim=0)))
-
-#             split_csr_tensor = torch.sparse_csr_tensor(new_crow, split_cols, split_vals, size=(seq_len, d_size), device=csr.device)
-#             inner_splits.append(split_csr_tensor)
-
-#         splits.append(inner_splits)
-
-#     return splits
-
-## temporaily, we convert the csr tensor to dense tensor and split
 def split_csr(csr: torch.sparse_csr_tensor, bsz: int, num_kv_heads: int) -> List[List[torch.sparse_csr_tensor]]:
     """
     Splits a CSR sparse tensor into a list of lists of interleaved CSR tensors along the rows.
@@ -133,47 +82,10 @@ def split_csr(csr: torch.sparse_csr_tensor, bsz: int, num_kv_heads: int) -> List
     if not csr.is_sparse_csr:
         raise ValueError("Input tensor must be a sparse CSR tensor.")
     
-    # csr = csr.to("cpu")
-    # print("shape of csr in csr_split:", csr.shape)
-    # print(csr.crow_indices().shape)
-    # print(csr.col_indices().shape)
-    # print(csr.values().shape)
-    # print(max(csr.crow_indices()), min(csr.crow_indices()))
-    # print(max(csr.col_indices()), min(csr.col_indices()))
-
     dense_tensor = csr.to_dense()
     dictionary_size = dense_tensor.shape[1]
     dense_tensor = dense_tensor.reshape(-1, bsz, num_kv_heads, dictionary_size)
-    return dense_tensor.permute(1, 2, 0, 3) # .to("cuda")
-
-    # total_rows, d_size = csr.size()
-    # seq_len = total_rows // (bsz * num_kv_heads)
-    # if total_rows % (bsz * num_kv_heads) != 0:
-    #     raise ValueError("Cannot evenly split the rows with given bsz and num_kv_heads.")
-
-    # crow_indices = csr.crow_indices()
-    # col_indices = csr.col_indices()
-    # values = csr.values()
-
-    # splits = []
-    # for batch_idx in range(bsz):
-    #     inner_splits = []
-    #     for kv_head_idx in range(num_kv_heads):
-    #         row_indices = torch.arange(seq_len) * num_kv_heads * bsz + batch_idx * num_kv_heads + kv_head_idx
-    #         start_indices, end_indices = crow_indices[row_indices], crow_indices[row_indices + 1]
-    #         start_end_pairs = torch.stack((start_indices, end_indices), dim=1)
-
-    #         split_cols = torch.cat([col_indices[s:e] for s, e in start_end_pairs], dim=0)
-    #         split_vals = torch.cat([values[s:e] for s, e in start_end_pairs], dim=0)
-    #         row_lengths = start_end_pairs[:, 1] - start_end_pairs[:, 0]
-    #         new_crow = torch.cat((torch.tensor([0], device=csr.device), torch.cumsum(row_lengths, dim=0)))
-
-    #         split_csr_tensor = torch.sparse_csr_tensor(new_crow, split_cols, split_vals, size=(seq_len, d_size), device=csr.device)
-    #         inner_splits.append(split_csr_tensor)
-
-    #     splits.append(inner_splits)
-
-    # return splits
+    return dense_tensor.permute(1, 2, 0, 3)
 
 class LlamaRMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
@@ -496,43 +408,11 @@ class LlamaAttention(nn.Module):
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3))
         
         if compressed_key_states is not None:
-            start_time = time.time() ##
             query_dictionary_product = torch.matmul(query_states, key_dictionaries[self.layer_idx])
-            # print(f"Time for qD in a single layer: {time.time() - start_time:.6f} seconds")
-            start_time = time.time()
-            # split_csr has an error
             compressed_key_states = split_csr(compressed_key_states, bsz, self.num_key_value_heads)
-            # print(f"Time for split csr: {time.time() - start_time:.6f} seconds")
-            
-            # print("shape of compressed_key_states", compressed_key_states.shape)
-            # print("shape of qD", query_dictionary_product.shape)
-            
-            start_time = time.time()
-            # compressed_attn_weights = []
-            # for i in range(bsz):
-            #     compressed_attn_weights_single_batch = []
-            #     for h in range(self.num_heads):
-            #         compressed_key_head = compressed_key_states[i][h // self.num_key_value_groups]
-            #         query_head = query_dictionary_product[i][h].transpose(0, 1).clone().detach()
-            #         # compressed_attn_weights_single_batch.append(torch.sparse.mm(compressed_key_head, query_head).transpose(0, 1))
-            #         # print("crow_indices:", compressed_key_head.crow_indices())
-            #         # print("col_indices:", compressed_key_head.col_indices())
-            #         # print("values:", compressed_key_head.values())
-            #         # print("size:", compressed_key_head.size())
-            #         compressed_key_head_dense = compressed_key_head.to_dense()
-            #         compressed_attn_weights_single_batch.append(torch.matmul(compressed_key_head_dense, query_head).transpose(0, 1))
-
-            #     compressed_attn_weights.append(torch.stack(compressed_attn_weights_single_batch, dim=0))
-            # compressed_attn_weights = torch.stack(compressed_attn_weights, dim=0)
-
-            # print("shape of attn weights", attn_weights.shape)
             compressed_key_states = repeat_kv(compressed_key_states, self.num_key_value_groups)
             compressed_attn_weights = torch.matmul(query_dictionary_product, compressed_key_states.transpose(2, 3))
-            # print("shape of compressed_attn_weights", compressed_attn_weights.shape)
-
             attn_weights = torch.cat([compressed_attn_weights, attn_weights], dim=-1)
-
-            # print(f"Time for attention weight calculation with compressed KVs: {time.time() - start_time:.6f} seconds")
 
         attn_weights = attn_weights / math.sqrt(self.head_dim)
 
@@ -545,7 +425,6 @@ class LlamaAttention(nn.Module):
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
 
         if compressed_value_states is not None:
-            # value_cache = torch.sparse.mm(compressed_value_states, value_dictionaries[self.layer_idx].transpose(0, 1))
             value_cache = torch.matmul(compressed_value_states.to_dense(), value_dictionaries[self.layer_idx].transpose(0, 1))
             value_cache = value_cache.reshape(-1, bsz, self.num_key_value_heads, self.head_dim).permute(1, 2, 0, 3).to(value_states.dtype)
             value_cache = repeat_kv(value_cache, self.num_key_value_groups)
